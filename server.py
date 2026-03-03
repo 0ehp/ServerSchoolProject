@@ -14,11 +14,14 @@ from waitress import serve
 from transformers import pipeline  # HuggingFace pipeline for genre classification
 
 app = Flask(__name__)
+@app.get("/")
+def health():
+    return {"status": "ok"}
 
 MODEL = None
 
 _genre_classifier = None
-
+"""
 def get_clap_model():
     global MODEL
     if MODEL is None:
@@ -28,9 +31,8 @@ def get_clap_model():
     return MODEL
 
 def get_genre_classifier():
-    """
-    Create a pipeline called audio-classification using the model speecifies, device -1 means only use cpu then store in genre_classifier
-    """
+    # Create a pipeline called audio-classification using the model speecifies, device -1 means only use cpu then store in genre_classifier
+
     global _genre_classifier
     if _genre_classifier is None:
         _genre_classifier = pipeline(
@@ -48,10 +50,7 @@ def health():
 
 @app.post("/features")
 def Features() -> dict[str, Any]:
-    """
-    Compute low-level audio features using librosa.
-    `bio` is a BytesIO containing the audio bytes.
-    """
+
     bio = io.BytesIO(request.data)
     audio, sr = sf.read(bio)
 
@@ -84,13 +83,7 @@ def Features() -> dict[str, Any]:
 
 @app.post("/classify")
 def get_music_tags_from_bytes():
-    """
-    Takes raw audio bytes (e.g. from stdin),
-    writes them to a temp file, and uses the HF
-    audio-classification pipeline to predict genres.
 
-    Uses mkstemp/cleanup to avoid Windows file-locking issues.
-    """
     wav_bytes = request.data
     if not wav_bytes:
         return jsonify({"error": "empty body"}), 400
@@ -108,10 +101,6 @@ def get_music_tags_from_bytes():
 
 @app.post("/classify_batch")
 def classifyBatch():
-    """
-   Accepts multiple files as multipart/form-data, field name "file".
-   Returns: [ { "name": "...", "preds": [ {label, score}, ... ] }, ... ]
-   """
 
     files = request.files.getlist("file")
     if not files:
@@ -148,3 +137,4 @@ if __name__ == "__main__":
     # print(app.url_map)
     serve(app, host="0.0.0.0", port=4000, threads=4)
     # app.run(host="0.0.0.0", port=4000, debug=False) #TODO set to false later
+   """

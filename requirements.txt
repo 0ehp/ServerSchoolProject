@@ -7,3 +7,5 @@ numpy
 flask
 huggingface_hub
 torchvision
+gunicorn
+waitress

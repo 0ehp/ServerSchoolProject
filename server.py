@@ -65,7 +65,9 @@ def Features() -> dict[str, Any]:
     import torch
     audio_tensor = torch.from_numpy(audio).unsqueeze(0)
 
-    embedding = MODEL.get_audio_embedding_from_data(
+    model = get_clap_model()
+
+    embedding = model.get_audio_embedding_from_data(
         x=audio_tensor,
         use_tensor=True
     )

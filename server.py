@@ -15,11 +15,17 @@ from transformers import pipeline  # HuggingFace pipeline for genre classificati
 
 app = Flask(__name__)
 
-MODEL = CLAP_Module(enable_fusion=False)
-MODEL.load_ckpt()
+MODEL = None
 
 _genre_classifier = None
 
+def get_clap_model():
+    global MODEL
+    if MODEL is None:
+        from laion_clap import CLAP_Module
+        MODEL = CLAP_Module(enable_fusion=False)
+        MODEL.load_ckpt()
+    return MODEL
 
 def get_genre_classifier():
     """

@@ -1,0 +1,9 @@
+torch
+torchaudio
+transformers
+laion-clap
+soundfile
+numpy
+flask
+huggingface_hub
+torchvision

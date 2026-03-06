@@ -21,7 +21,7 @@ def health():
 MODEL = None
 
 _genre_classifier = None
-"""
+
 def get_clap_model():
     global MODEL
     if MODEL is None:
@@ -137,4 +137,3 @@ if __name__ == "__main__":
     # print(app.url_map)
     serve(app, host="0.0.0.0", port=4000, threads=4)
     # app.run(host="0.0.0.0", port=4000, debug=False) #TODO set to false later
-   """

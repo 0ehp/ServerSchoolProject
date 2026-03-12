@@ -114,7 +114,7 @@ def extract_batch():
 	wav_bytes_list = [f.read for f in files]
 	
 	with ProcessPoolExecutor(max_workers=4) as executor:
-		results = list(executor.map(Features, wav_bytes_list)
+		results = list(executor.map(Features, wav_bytes_list))
 	return jsonify(results)
 
 @app.post("/classify")

@@ -1,13 +1,16 @@
 import io
 import os
 import tempfile
+from io import BytesIO
 from typing import Any
 from flask import Flask, request, jsonify
 import numpy as np  # number crunching
 import soundfile as sf
-from laion_clap import CLAP_Module
 from waitress import serve
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
+from laion_clap import CLAP_Module
+import threading
+
 # ---------- GLOBAL: genre classifier pipeline ----------
 # Uses dima806/music_genres_classification (wav2vec2-based genre model)
 
@@ -20,17 +23,12 @@ app = Flask(__name__)
 def health():
     return {"status": "ok"}
 
-MODEL = None
+MODEL = CLAP_Module(enable_fusion=False)
+MODEL.load_ckpt()
+MODEL_LOCK = threading.Lock()
 
 _genre_classifier = None
 
-def get_clap_model():
-    global MODEL
-    if MODEL is None:
-        from laion_clap import CLAP_Module
-        MODEL = CLAP_Module(enable_fusion=False)
-        MODEL.load_ckpt()
-    return MODEL
 
 def get_genre_classifier():
     # Create a pipeline called audio-classification using the model speecifies, device -1 means only use cpu then store in genre_classifier
@@ -61,9 +59,8 @@ def SingleFeatures() -> dict[str, Any]:
     import torch
     audio_tensor = torch.from_numpy(audio).unsqueeze(0)
 
-    model = get_clap_model()
 
-    embedding = model.get_audio_embedding_from_data(
+    embedding = MODEL.get_audio_embedding_from_data(
         x=audio_tensor,
         use_tensor=True
     )
@@ -76,47 +73,49 @@ def SingleFeatures() -> dict[str, Any]:
         embedding = embedding / norm
 
     return {"Embedding": embedding.tolist()}
+
 
 def Features(wav_bytes):
+    try:
+        audio, sr = sf.read(wav_bytes)
 
-    audio, sr = sf.read(wav_bytes)
+        if audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+        if audio.ndim > 1:
+            audio = np.mean(audio, axis=1)
 
-    if audio.dtype != np.float32:
-        audio = audio.astype(np.float32)
+        import torch
+        audio_tensor = torch.from_numpy(audio).unsqueeze(0)
 
-    if audio.ndim > 1:
-        audio = np.mean(audio, axis=1)
+        with MODEL_LOCK:
+            embedding = MODEL.get_audio_embedding_from_data(
+                x=audio_tensor,
+                use_tensor=True
+            )
 
-    # Convert to tensor batch
-    import torch
-    audio_tensor = torch.from_numpy(audio).unsqueeze(0)
+        embedding = embedding.detach().cpu().numpy()[0]
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
 
-    model = get_clap_model()
-
-    embedding = model.get_audio_embedding_from_data(
-        x=audio_tensor,
-        use_tensor=True
-    )
-
-    embedding = embedding.detach().cpu().numpy()[0]
-
-    # L2 normalize
-    norm = np.linalg.norm(embedding)
-    if norm > 0:
-        embedding = embedding / norm
-
-    return {"Embedding": embedding.tolist()}
+        return {"Embedding": embedding.tolist()}
+    except Exception as e:
+        print(f"Error processing file: {e}")
+        return None
 
 
 @app.post("/features/batch")
 def extract_batch():
-	files = request.files.getlist("files")
-	wav_bytes_list = [f.read for f in files]
-	
-	with ProcessPoolExecutor(max_workers=4) as executor:
-		results = list(executor.map(Features, wav_bytes_list))
-	return jsonify(results)
+    files = request.files.getlist("files")
+    wav_bytes_list = [BytesIO(f.read()) for f in files]
+    print(f"Received {len(files)} files")  # check files are arriving
 
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(Features, wav_bytes_list))
+
+    results = [r for r in results if r is not None]  # filter failed
+    print(f"Returning {len(results)} embeddings")
+    return jsonify(results)
 @app.post("/classify")
 def get_music_tags_from_bytes():
 

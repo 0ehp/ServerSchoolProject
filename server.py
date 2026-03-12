@@ -1,9 +1,13 @@
 import io
+import os
+import tempfile
+from io import BytesIO
 from typing import Any
 from flask import Flask, request, jsonify
 import numpy as np  # number crunching
 import soundfile as sf
 from waitress import serve
+from concurrent.futures import ThreadPoolExecutor
 from laion_clap import CLAP_Module
 import threading
 
@@ -70,6 +74,49 @@ def SingleFeatures() -> dict[str, Any]:
 
     return {"Embedding": embedding.tolist()}
 
+
+def Features(wav_bytes):
+    try:
+        audio, sr = sf.read(wav_bytes)
+
+        if audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+        if audio.ndim > 1:
+            audio = np.mean(audio, axis=1)
+
+        import torch
+        audio_tensor = torch.from_numpy(audio).unsqueeze(0)
+
+        with MODEL_LOCK:
+            embedding = MODEL.get_audio_embedding_from_data(
+                x=audio_tensor,
+                use_tensor=True
+            )
+
+        embedding = embedding.detach().cpu().numpy()[0]
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
+
+        return {"Embedding": embedding.tolist()}
+    except Exception as e:
+        print(f"Error processing file: {e}")
+        return None
+
+
+@app.post("/features/batch")
+def extract_batch():
+    files = request.files.getlist("files")
+    wav_bytes_list = [BytesIO(f.read()) for f in files]
+    print(f"Received {len(files)} files")  # check files are arriving
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(Features, wav_bytes_list))
+
+    results = [r for r in results if r is not None]  # filter failed
+    print(f"Returning {len(results)} embeddings")
+    return jsonify(results)
+@app.post("/classify")
 def get_music_tags_from_bytes():
 
     wav_bytes = request.data
@@ -85,6 +132,41 @@ def get_music_tags_from_bytes():
 
     # res is a list of dicts: { 'label': 'rock', 'score': 0.92, ... }
     return jsonify(res)
+
+
+@app.post("/classify_batch")
+def classifyBatch():
+
+    files = request.files.getlist("file")
+    if not files:
+        return jsonify({"error": "no files uploaded"}), 400
+
+    classifier = get_genre_classifier()
+    results = []
+
+    for f in files:
+        wav_bytes = f.read()
+        if not wav_bytes:
+            continue
+
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        try:
+            with os.fdopen(fd, "wb") as tmp:
+                tmp.write(wav_bytes)
+
+            preds = classifier(path, top_k=3)
+            results.append({
+                "name": f.filename,
+                "preds": preds  # list of { label, score }
+            })
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    return jsonify(results)
+
 
 if __name__ == "__main__":
     print("Server is UP")

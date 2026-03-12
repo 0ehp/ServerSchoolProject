@@ -110,7 +110,7 @@ def extract_batch():
     wav_bytes_list = [BytesIO(f.read()) for f in files]
     print(f"Received {len(files)} files")  # check files are arriving
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(Features, wav_bytes_list))
 
     results = [r for r in results if r is not None]  # filter failed

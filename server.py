@@ -7,11 +7,13 @@ import numpy as np  # number crunching
 import soundfile as sf
 from laion_clap import CLAP_Module
 from waitress import serve
-
+from concurrent.futures import ProcessPoolExecutor
 # ---------- GLOBAL: genre classifier pipeline ----------
 # Uses dima806/music_genres_classification (wav2vec2-based genre model)
 
 from transformers import pipeline  # HuggingFace pipeline for genre classification
+
+print("Starting Server")
 
 app = Flask(__name__)
 @app.get("/")
@@ -43,13 +45,8 @@ def get_genre_classifier():
     return _genre_classifier
 
 
-@app.get("/")
-def health():
-    return {"status": "ok"}
-
-
 @app.post("/features")
-def Features() -> dict[str, Any]:
+def SingleFeatures() -> dict[str, Any]:
 
     bio = io.BytesIO(request.data)
     audio, sr = sf.read(bio)
@@ -80,6 +77,45 @@ def Features() -> dict[str, Any]:
 
     return {"Embedding": embedding.tolist()}
 
+def Features(wav_bytes):
+
+    audio, sr = sf.read(wav_bytes)
+
+    if audio.dtype != np.float32:
+        audio = audio.astype(np.float32)
+
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+
+    # Convert to tensor batch
+    import torch
+    audio_tensor = torch.from_numpy(audio).unsqueeze(0)
+
+    model = get_clap_model()
+
+    embedding = model.get_audio_embedding_from_data(
+        x=audio_tensor,
+        use_tensor=True
+    )
+
+    embedding = embedding.detach().cpu().numpy()[0]
+
+    # L2 normalize
+    norm = np.linalg.norm(embedding)
+    if norm > 0:
+        embedding = embedding / norm
+
+    return {"Embedding": embedding.tolist()}
+
+
+@app.post("/features/batch")
+def extract_batch():
+	files = request.files.getlist("files")
+	wav_bytes_list = [f.read for f in files]
+	
+	with ProcessPoolExecutor(max_workers=4) as executor:
+		results = list(executor.map(Features, wav_bytes_list)
+	return jsonify(results)
 
 @app.post("/classify")
 def get_music_tags_from_bytes():
@@ -134,6 +170,8 @@ def classifyBatch():
 
 
 if __name__ == "__main__":
+    print("Server is UP")
     # print(app.url_map)
     serve(app, host="0.0.0.0", port=4000, threads=4)
-    # app.run(host="0.0.0.0", port=4000, debug=False) #TODO set to false later
+    print("Server is up") 
+   # app.run(host="0.0.0.0", port=4000, debug=False) #TODO set to false later

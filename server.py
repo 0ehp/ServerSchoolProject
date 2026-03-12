@@ -87,11 +87,11 @@ def Features(wav_bytes):
         import torch
         audio_tensor = torch.from_numpy(audio).unsqueeze(0)
 
-        with MODEL_LOCK:
-            embedding = MODEL.get_audio_embedding_from_data(
-                x=audio_tensor,
-                use_tensor=True
-            )
+
+        embedding = MODEL.get_audio_embedding_from_data(
+            x=audio_tensor,
+            use_tensor=True
+        )
 
         embedding = embedding.detach().cpu().numpy()[0]
         norm = np.linalg.norm(embedding)

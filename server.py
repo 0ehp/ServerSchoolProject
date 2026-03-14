@@ -133,8 +133,7 @@ def single_features():
         wav_bytes = request.data
     except Exception as e:
         print("Client disconnected during upload")
-        return "", 499
-
+        return jsonify({"Client disconnected during upload"}),499
     if not wav_bytes:
         return jsonify({"error": "empty body"}), 400
 

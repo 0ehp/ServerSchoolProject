@@ -5,7 +5,6 @@ from typing import Any
 from flask import Flask, request, jsonify
 import numpy as np
 import soundfile as sf
-from waitress import serve
 from concurrent.futures import ThreadPoolExecutor
 import essentia.standard as es
 
@@ -17,6 +16,11 @@ app = Flask(__name__)
 _genre_embed_model = None
 _genre_predict_model = None
 _genre_labels = None
+_rhythm_extractor = es.RhythmExtractor2013()
+_key_extractor = es.KeyExtractor()
+_loudness_extractor = es.Loudness()
+_centroid_extractor = es.SpectralCentroidTime()
+
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
 
@@ -35,6 +39,7 @@ def get_genre_models():
         with open(os.path.join(MODELS_DIR, 'genre_discogs400-discogs-effnet-1.json')) as f:
             _genre_labels = json.load(f)['classes']
     return _genre_embed_model, _genre_predict_model, _genre_labels
+
 
 
 def load_audio(wav_bytes, target_sr=44100):
@@ -62,18 +67,16 @@ def extract_features(wav_bytes):
         audio = load_audio(wav_bytes)
 
         # tempo / beat
-        rhythm_extractor = es.RhythmExtractor2013()
-        bpm, beats, beats_confidence, _, beats_intervals = rhythm_extractor(audio)
+        bpm, beats, beats_confidence, _, beats_intervals = _rhythm_extractor(audio)
 
         # key
-        key_extractor = es.KeyExtractor()
-        key, scale, key_strength = key_extractor(audio)
+        key, scale, key_strength = _key_extractor(audio)
 
         # loudness
-        loudness = es.Loudness()(audio)
+        loudness = _loudness_extractor(audio)
 
         # spectral centroid
-        centroid = es.SpectralCentroidTime()(audio)
+        centroid = _centroid_extractor(audio)
 
         return {
             "bpm": round(float(bpm), 2),
@@ -153,25 +156,31 @@ def classify():
     return jsonify(result)
 
 
-@app.post("/classify_batch")
+@app.post("/classify/batch")
 def classify_batch():
-    files = request.files.getlist("file")
+    files = request.files.getlist("files")
     if not files:
         return jsonify({"error": "no files uploaded"}), 400
 
-    results = []
+    file_data = []
     for f in files:
         wav_bytes = f.read()
-        if not wav_bytes:
-            continue
+        if wav_bytes:
+            file_data.append((f.filename, wav_bytes))
+
+    if not file_data:
+        return jsonify({"error": "no valid audio files uploaded"}), 400
+
+    def classify_one(item):
+        filename, wav_bytes = item
         preds = predict_genre(wav_bytes)
-        results.append({
-            "name": f.filename,
+        return {
+            "name": filename,
             "preds": preds
-        })
+        }
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(classify_one, file_data))
+
     return jsonify(results)
 
-
-if __name__ == "__main__":
-    print("Server is UP")
-    serve(app, host="0.0.0.0", port=4000, threads=4)

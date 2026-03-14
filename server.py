@@ -131,11 +131,18 @@ def health():
 def single_features():
     try:
         wav_bytes = request.data
-    except Exception as e:
+    except Exception:
         print("Client disconnected during upload")
-        return jsonify({"Client disconnected during upload"}),499
+        return jsonify({"error": "client disconnected during upload"}), 499
+
     if not wav_bytes:
         return jsonify({"error": "empty body"}), 400
+
+    result = extract_features(wav_bytes)
+    if result is None:
+        return jsonify({"error": "feature extraction failed"}), 500
+
+    return jsonify(result), 200
 
 @app.post("/features/batch")
 def extract_batch():

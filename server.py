@@ -136,8 +136,7 @@ def extract_batch():
     wav_bytes_list = [f.read() for f in files]
     print(f"Received {len(files)} files")
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(extract_features, wav_bytes_list))
+    results = [extract_features(w) for w in wav_bytes_list]
 
     results = [r for r in results if r is not None]
     print(f"Returning {len(results)} results")

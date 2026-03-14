@@ -12,7 +12,7 @@ import time
 print("Starting Server")
 
 app = Flask(__name__)
-
+DEBUG_PRINTING = False
 # ---------- GLOBAL: preload essentia models once at startup ----------
 _genre_embed_model = None
 _genre_predict_model = None
@@ -21,6 +21,7 @@ _rhythm_extractor = es.RhythmExtractor2013()
 _key_extractor = es.KeyExtractor()
 _loudness_extractor = es.Loudness()
 _centroid_extractor = es.SpectralCentroidTime()
+_resamplers = {}
 
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
@@ -41,17 +42,26 @@ def get_genre_models():
             _genre_labels = json.load(f)['classes']
     return _genre_embed_model, _genre_predict_model, _genre_labels
 
+def get_resampler(input_sr, output_sr):
+    key = (input_sr, output_sr)
+    if key not in _resamplers:
+        _resamplers[key] = es.Resample(
+            inputSampleRate=input_sr,
+            outputSampleRate=output_sr
+        )
+    return _resamplers[key]
 
 
 def load_audio(wav_bytes, target_sr=16000):
-    """decode wav bytes to mono float32 numpy array"""
     audio, sr = sf.read(io.BytesIO(wav_bytes), dtype="float32", always_2d=False)
+
     if audio.ndim > 1:
         audio = np.mean(audio, axis=1)
-    # resample if needed
+
     if sr != target_sr:
-        resampler = es.Resample(inputSampleRate=sr, outputSampleRate=target_sr)
+        resampler = get_resampler(sr, target_sr)
         audio = resampler(audio)
+
     return audio
 
 
@@ -79,13 +89,14 @@ def extract_features(wav_bytes):
         centroid = _centroid_extractor(audio)
         t5 = time.perf_counter()
 
-        print(
-            f"decode={t1-t0:.3f}s "
-            f"tempo={t2-t1:.3f}s "
-            f"key={t3-t2:.3f}s "
-            f"loudness={t4-t3:.3f}s "
-            f"centroid={t5-t4:.3f}s"
-        )
+        if DEBUG_PRINTING:
+            print(
+                f"decode={t1-t0:.3f}s "
+                f"tempo={t2-t1:.3f}s "
+                f"key={t3-t2:.3f}s "
+                f"loudness={t4-t3:.3f}s "
+                f"centroid={t5-t4:.3f}s"
+            )
 
         return {
             "bpm": round(float(bpm), 2),

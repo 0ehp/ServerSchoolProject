@@ -43,11 +43,9 @@ def get_genre_models():
 
 
 
-def load_audio(wav_bytes, target_sr=44100):
+def load_audio(wav_bytes, target_sr=16000):
     """decode wav bytes to mono float32 numpy array"""
-    audio, sr = sf.read(io.BytesIO(wav_bytes))
-    if audio.dtype != np.float32:
-        audio = audio.astype(np.float32)
+    audio, sr = sf.read(io.BytesIO(wav_bytes), dtype="float32", always_2d=False)
     if audio.ndim > 1:
         audio = np.mean(audio, axis=1)
     # resample if needed

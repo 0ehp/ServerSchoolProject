@@ -7,6 +7,7 @@ import numpy as np
 import soundfile as sf
 from concurrent.futures import ThreadPoolExecutor
 import essentia.standard as es
+import time
 
 print("Starting Server")
 
@@ -62,21 +63,31 @@ def load_audio_16k(wav_bytes):
 
 
 def extract_features(wav_bytes):
-    """extract tempo, key, loudness from audio"""
     try:
+        t0 = time.perf_counter()
+
         audio = load_audio(wav_bytes)
+        t1 = time.perf_counter()
 
-        # tempo / beat
         bpm, beats, beats_confidence, _, beats_intervals = _rhythm_extractor(audio)
+        t2 = time.perf_counter()
 
-        # key
         key, scale, key_strength = _key_extractor(audio)
+        t3 = time.perf_counter()
 
-        # loudness
         loudness = _loudness_extractor(audio)
+        t4 = time.perf_counter()
 
-        # spectral centroid
         centroid = _centroid_extractor(audio)
+        t5 = time.perf_counter()
+
+        print(
+            f"decode={t1-t0:.3f}s "
+            f"tempo={t2-t1:.3f}s "
+            f"key={t3-t2:.3f}s "
+            f"loudness={t4-t3:.3f}s "
+            f"centroid={t5-t4:.3f}s"
+        )
 
         return {
             "bpm": round(float(bpm), 2),
@@ -87,10 +98,10 @@ def extract_features(wav_bytes):
             "loudness": round(float(loudness), 2),
             "spectral_centroid": round(float(centroid), 2),
         }
+
     except Exception as e:
         print(f"Error extracting features: {e}")
         return None
-
 
 def predict_genre(wav_bytes, top_k=5):
     """predict genre using essentia discogs model"""

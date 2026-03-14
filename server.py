@@ -128,16 +128,15 @@ def health():
 
 
 @app.post("/features")
-def single_features() -> dict[str, Any]:
-    wav_bytes = request.data
+def single_features():
+    try:
+        wav_bytes = request.data
+    except Exception as e:
+        print("Client disconnected during upload")
+        return "", 499
+
     if not wav_bytes:
         return jsonify({"error": "empty body"}), 400
-
-    result = extract_features(wav_bytes)
-    if result is None:
-        return jsonify({"error": "feature extraction failed"}), 500
-    return jsonify(result)
-
 
 @app.post("/features/batch")
 def extract_batch():

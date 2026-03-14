@@ -95,3 +95,103 @@ def extract_features(wav_bytes):
     except Exception as e:
         print(f"Error extracting features: {e}")
         return None
+
+
+def predict_genre(wav_bytes, top_k=5):
+    """predict genre using essentia discogs model"""
+    try:
+        audio = load_audio_16k(wav_bytes)
+        embed_model, predict_model, labels = get_genre_models()
+
+        embeddings = embed_model(audio)
+        predictions = predict_model(embeddings)
+
+        mean_preds = predictions.mean(axis=0)
+        top_idx = mean_preds.argsort()[-top_k:][::-1]
+
+        return [
+            {"label": labels[i], "score": round(float(mean_preds[i]), 4)}
+            for i in top_idx
+        ]
+    except Exception as e:
+        print(f"Error predicting genre: {e}")
+        return None
+
+
+@app.get("/")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/features")
+def single_features():
+    try:
+        wav_bytes = request.data
+    except Exception:
+        print("Client disconnected during upload")
+        return jsonify({"error": "client disconnected during upload"}), 499
+
+    if not wav_bytes:
+        return jsonify({"error": "empty body"}), 400
+
+    result = extract_features(wav_bytes)
+    if result is None:
+        return jsonify({"error": "feature extraction failed"}), 500
+
+    return jsonify(result), 200
+
+@app.post("/features/batch")
+def extract_batch():
+    files = request.files.getlist("files")
+    wav_bytes_list = [f.read() for f in files]
+    if DEBUG_PRINTING:
+        print(f"Received {len(files)} files")
+
+    results = [extract_features(w) for w in wav_bytes_list]
+
+    results = [r for r in results if r is not None]
+    if DEBUG_PRINTING:
+        print(f"Returning {len(results)} results")
+    return jsonify(results)
+
+
+@app.post("/classify")
+def classify():
+    wav_bytes = request.data
+    if not wav_bytes:
+        return jsonify({"error": "empty body"}), 400
+
+    result = predict_genre(wav_bytes)
+    if result is None:
+        return jsonify({"error": "classification failed"}), 500
+    return jsonify(result)
+
+
+@app.post("/classify/batch")
+def classify_batch():
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "no files uploaded"}), 400
+
+    file_data = []
+    for f in files:
+        wav_bytes = f.read()
+        if wav_bytes:
+            file_data.append((f.filename, wav_bytes))
+
+    if not file_data:
+        return jsonify({"error": "no valid audio files uploaded"}), 400
+
+    def classify_one(item):
+        filename, wav_bytes = item
+        preds = predict_genre(wav_bytes)
+        return {
+            "name": filename,
+            "preds": preds
+        }
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(classify_one, file_data))
+
+    return jsonify(results)
+

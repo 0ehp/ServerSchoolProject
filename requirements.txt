@@ -1,10 +1,10 @@
+pydantic
+fastapi
 torch
 torchaudio
 transformers
 soundfile
 numpy
-flask
 huggingface_hub
 essentia
 gunicorn
-waitress

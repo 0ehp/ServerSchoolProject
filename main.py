@@ -1,15 +1,16 @@
 import io
 import json
 import os
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, Request
 import numpy as np
 import soundfile as sf
-from concurrent.futures import ThreadPoolExecutor
 import essentia.standard as es
+from pydantic import BaseModel
+import time
 
 print("Starting Server")
 
-app = Flask(__name__)
+app = FastAPI()
 
 DEBUG_PRINTING = False
 TARGET_SR = 16000
@@ -19,10 +20,16 @@ MAX_SAMPLES = TARGET_SR * MAX_SECONDS
 _genre_embed_model = None
 _genre_predict_model = None
 _genre_labels = None
-_rhythm_extractor = es.RhythmExtractor2013()
+_rhythm_extractor = es.RhythmExtractor2013(method="degara")
 _key_extractor = es.KeyExtractor()
 _loudness_extractor = es.Loudness()
 _centroid_extractor = es.SpectralCentroidTime()
+_windowing = es.Windowing(type='hann')
+_danceability_extractor = es.Danceability()
+_dynamic_complexity_extractor = es.DynamicComplexity()
+_mfcc_algo = es.MFCC(numberCoefficients=13)
+_pitch_algo = es.PitchYinFFT(frameSize=2048, sampleRate=44100)
+_spectrum = es.Spectrum()
 _resamplers = {}
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
@@ -69,29 +76,68 @@ def load_audio(wav_bytes, target_sr=TARGET_SR):
 
     return audio
 
-
-def load_audio_16k(wav_bytes):
-    return load_audio(wav_bytes, target_sr=16000)
+class SongResult(BaseModel):
+    bpm: float
+    beats_confidence: float
+    key: str
+    scale: str
+    key_strength: float
+    loudness: float
+    spectral_centroid: float
+    danceability: float
+    dynamic_complexity: float
+    mfcc: list[float]
+    vocal: float
 
 
 def extract_features(wav_bytes):
     try:
+        t0 = time.perf_counter()
         audio = load_audio(wav_bytes)
+        t1 = time.perf_counter()
 
         bpm, beats, beats_confidence, _, beats_intervals = _rhythm_extractor(audio)
+        t2 = time.perf_counter()
+
         key, scale, key_strength = _key_extractor(audio)
         loudness = _loudness_extractor(audio)
         centroid = _centroid_extractor(audio)
+        t3 = time.perf_counter()
 
-        return {
-            "bpm": round(float(bpm), 2),
-            "beats_confidence": round(float(beats_confidence), 2),
-            "key": key,
-            "scale": scale,
-            "key_strength": round(float(key_strength), 2),
-            "loudness": round(float(loudness), 2),
-            "spectral_centroid": round(float(centroid), 2),
-        }
+        dance, dfa_array = _danceability_extractor(audio)
+        t4 = time.perf_counter()
+
+        complexity, loudness_dc = _dynamic_complexity_extractor(audio)
+        t5 = time.perf_counter()
+
+        mfcc_frames = []
+        confidence = 0
+        for frame in es.FrameGenerator(audio, frameSize=2048, hopSize=1024):
+            windowed = _windowing(frame)
+            spec = _spectrum(windowed)
+            bands, mfcc_coeffs = _mfcc_algo(spec)
+            mfcc_frames.append(mfcc_coeffs)
+            pitch, confidence = _pitch_algo(spec)
+
+        mfcc_mean = np.mean(mfcc_frames, axis=0).tolist()
+        t6 = time.perf_counter()
+
+        print(
+            f"load: {t1 - t0:.3f}s | bpm: {t2 - t1:.3f}s | key+loud+centroid: {t3 - t2:.3f}s | dance: {t4 - t3:.3f}s | complexity: {t5 - t4:.3f}s | mfcc: {t6 - t5:.3f}s | total: {t6 - t0:.3f}s")
+        return SongResult(
+            bpm=float(bpm),
+            beats_confidence=float(beats_confidence),
+            key=key,
+            scale=scale,
+            key_strength=float(key_strength),
+            loudness=float(loudness),
+            spectral_centroid=float(centroid),
+            danceability=float(dance),
+            dynamic_complexity=float(complexity),
+            mfcc=mfcc_mean,
+            vocal=float(confidence)
+        )
+
     except Exception as e:
         print(f"Error extracting features: {e}")
         return None
@@ -100,7 +146,7 @@ def extract_features(wav_bytes):
 def predict_genre(wav_bytes, top_k=5):
     """predict genre using essentia discogs model"""
     try:
-        audio = load_audio_16k(wav_bytes)
+        audio = load_audio(wav_bytes)
         embed_model, predict_model, labels = get_genre_models()
 
         embeddings = embed_model(audio)
@@ -122,76 +168,45 @@ def predict_genre(wav_bytes, top_k=5):
 def health():
     return {"status": "ok"}
 
-
 @app.post("/features")
-def single_features():
+async def single_features(request: Request):
     try:
-        wav_bytes = request.data
+        wav_bytes = await request.body()
     except Exception:
         print("Client disconnected during upload")
-        return jsonify({"error": "client disconnected during upload"}), 499
+        return {"error": "client disconnected during upload"}
 
     if not wav_bytes:
-        return jsonify({"error": "empty body"}), 400
+        return {"error": "empty body"}
 
     result = extract_features(wav_bytes)
     if result is None:
-        return jsonify({"error": "feature extraction failed"}), 500
+        return {"error": "feature extraction failed"}
 
-    return jsonify(result), 200
+    return result
 
 @app.post("/features/batch")
-def extract_batch():
-    files = request.files.getlist("files")
-    wav_bytes_list = [f.read() for f in files]
-    if DEBUG_PRINTING:
-        print(f"Received {len(files)} files")
+async def extract_batch(request: Request):
+    wav_bytes_list = await request.body()
 
     results = [extract_features(w) for w in wav_bytes_list]
 
     results = [r for r in results if r is not None]
+
     if DEBUG_PRINTING:
         print(f"Returning {len(results)} results")
-    return jsonify(results)
+    return results
 
 
 @app.post("/classify")
-def classify():
-    wav_bytes = request.data
+async def classify(request: Request):
+    wav_bytes = await request.body()
     if not wav_bytes:
-        return jsonify({"error": "empty body"}), 400
+        return {"error": "empty body"}
 
     result = predict_genre(wav_bytes)
     if result is None:
-        return jsonify({"error": "classification failed"}), 500
-    return jsonify(result)
+        return {"error": "classification failed"}
+    return result
 
-
-@app.post("/classify/batch")
-def classify_batch():
-    files = request.files.getlist("files")
-    if not files:
-        return jsonify({"error": "no files uploaded"}), 400
-
-    file_data = []
-    for f in files:
-        wav_bytes = f.read()
-        if wav_bytes:
-            file_data.append((f.filename, wav_bytes))
-
-    if not file_data:
-        return jsonify({"error": "no valid audio files uploaded"}), 400
-
-    def classify_one(item):
-        filename, wav_bytes = item
-        preds = predict_genre(wav_bytes)
-        return {
-            "name": filename,
-            "preds": preds
-        }
-
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        results = list(executor.map(classify_one, file_data))
-
-    return jsonify(results)
 
